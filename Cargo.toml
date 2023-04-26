@@ -1,0 +1,38 @@
+[package]
+name = "yrs-webrtc"
+version = "0.1.0"
+description = "WebRTC network connector for Yjs/Yrs document update exchange"
+license = "MIT"
+authors = ["Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
+keywords = ["crdt", "yrs"]
+edition = "2018"
+homepage = "https://github.com/Horusiath/yrs-webrtc"
+repository = "https://github.com/Horusiath/yrs-webrtc"
+readme = "./README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lib0 = "^0.16"
+yrs = "^0.16"
+y-sync = { version = "^0.3", features = ["net"] }
+wrtc = { version = "^0.1", path = "../wrtc" }
+log = "0.4"
+thiserror = "1.0"
+rand = "0.7"
+tokio = { version = "1.24", features = ["full"] }
+serde = { version ="1.0", features=["derive", "rc"]}
+tokio-tungstenite = { version = "^0.18", features = ["native-tls"] }
+serde_json = "1.0"
+base64 = "0.21"
+bytes = "1.4"
+enclose = "1.1"
+url = "2.3"
+futures-util = {version = "0.3", features = ["sink"] }
+tokio-util = "0.7"
+arc-swap = "1.6"
+
+[dev-dependencies]
+env_logger = "0.10"
+yrs-warp = "0.6"
+warp = "0.3"
