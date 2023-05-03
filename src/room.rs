@@ -3,8 +3,10 @@ use crate::signal::{PeerEvent, SignalEvent, SignalingConn};
 use crate::{AwarenessRef, PeerId, Topic};
 use crate::{Error, Result};
 use bytes::Bytes;
+use futures_util::future::try_join_all;
 use lib0::encoding::Write;
 use std::borrow::Cow;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::ops::Deref;
@@ -12,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use wrtc::peer_connection::Signal;
 use y_sync::awareness::Awareness;
 use y_sync::sync::{DefaultProtocol, Message, SyncMessage, MSG_SYNC_UPDATE};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -35,7 +38,16 @@ pub struct Room {
 }
 
 impl Room {
-    pub fn new(
+    pub fn open<T, I>(name: T, awareness: Awareness, signaling_conns: I) -> Arc<Self>
+    where
+        Arc<str>: From<T>,
+        I: IntoIterator<Item = Arc<SignalingConn>>,
+    {
+        let signaling_conns: Arc<[Arc<SignalingConn>]> = signaling_conns.into_iter().collect();
+        Self::create_internal(Topic::from(name), awareness, signaling_conns, 24)
+    }
+
+    pub fn create_internal(
         name: Topic,
         mut awareness: Awareness,
         signaling_conns: Arc<[Arc<SignalingConn>]>,
@@ -84,7 +96,6 @@ impl Room {
                         for (peer_id, conn) in conns.iter_mut() {
                             let msg = Bytes::from(msg.clone());
                             if let Err(cause) = conn.send(msg).await {
-                                log::warn!("failed to send update to '{peer_id}': {cause}");
                                 remove.push(peer_id.clone());
                             }
                         }
@@ -122,103 +133,95 @@ impl Room {
                 .unwrap()
         };
         for conn in signaling_conns.iter().cloned() {
-            let room_ref = Arc::downgrade(&room);
-            let mut msgs = conn.subscribe();
-            let room_name = room.name.clone();
-            let peer_id = room.peer_id.clone();
-            let wrtc_conns = Arc::downgrade(&room.wrtc_conns);
-            let peers_tx = room.peer_events.clone();
-            let awareness = room.awareness.clone();
-            let job = tokio::spawn(async move {
-                while let Ok(msg) = msgs.recv().await {
-                    if let Some(wrtc_conns) = wrtc_conns.upgrade() {
-                        match msg.deref() {
-                            crate::signal::Message::Publish { topic, data }
-                                if topic.deref() == room_name.deref()
-                                    && data.from() != peer_id.deref() =>
-                            {
-                                match data {
-                                    SignalEvent::Announce { from } => {
-                                        let mut conns = wrtc_conns.write().await;
-                                        let had_already = conns.contains_key(from.deref());
-                                        if conns.len() < max_conns {
-                                            let remote_peer_id: PeerId = Arc::from(from.deref());
-                                            let conn = Connection::new(
-                                                awareness.clone(),
-                                                Arc::downgrade(&conn),
-                                                true,
-                                                remote_peer_id.clone(),
-                                                room_ref.clone(),
-                                            )
-                                            .await;
-                                            match conn {
-                                                Ok(conn) => {
-                                                    if let Err(e) = conn.connected().await {
-                                                        log::error!("failed to establish connection with peer '{remote_peer_id}': {e}");
-                                                    }
-                                                    let prev = conns.insert(remote_peer_id, conn);
-                                                    if let Some(_c) = prev {
-                                                        //let _ = c.close().await; //TODO: wait until webrtc::RTCConnection::close is Send
-                                                        // probably already failed connection
-                                                    }
-                                                    if !had_already {
-                                                        let _ = peers_tx.send(PeerEvent::Up(
-                                                            Arc::from(from.deref()),
-                                                        ));
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    log::error!("failed to establish connection with peer '{remote_peer_id}': {e}");
-                                                }
+            let job = tokio::spawn(Room::subscribe(room.clone(), conn));
+            signaling_msg_handlers.push(job);
+        }
+        room
+    }
+
+    /// Subscribes for the [Message]s incoming from the WebSocket server.
+    async fn subscribe(room: Arc<Room>, conn: Arc<SignalingConn>) {
+        let room_ref = Arc::downgrade(&room);
+        let mut msgs = conn.subscribe();
+        let room_name = room.name.clone();
+        let max_conns = room.max_conns;
+        let peer_id = room.peer_id.clone();
+        let wrtc_conns = Arc::downgrade(&room.wrtc_conns);
+        let peers_tx = room.peer_events.clone();
+        let awareness = room.awareness.clone();
+        let mut msgs = conn.subscribe();
+        while let Ok(msg) = msgs.recv().await {
+            if let Some(wrtc_conns) = wrtc_conns.upgrade() {
+                match msg.deref() {
+                    crate::signal::Message::Publish { topic, data }
+                        if topic.deref() == room_name.deref() && data.from() != peer_id.deref() =>
+                    {
+                        match data {
+                            SignalEvent::Announce { from } => {
+                                let mut conns = wrtc_conns.write().await;
+                                let had_already = conns.contains_key(from.deref());
+                                if conns.len() < max_conns {
+                                    if !had_already {
+                                        let remote_peer_id = PeerId::from(from.deref());
+                                        log::trace!("'{peer_id}' setting up connection to '{remote_peer_id}' as an initiator");
+                                        let result = Connection::new(
+                                            awareness.clone(),
+                                            Arc::downgrade(&conn),
+                                            true,
+                                            remote_peer_id.clone(),
+                                            room_ref.clone(),
+                                        )
+                                        .await;
+                                        match result {
+                                            Ok(conn) => {
+                                                conns.insert(remote_peer_id, conn);
                                             }
-                                        }
-                                    }
-                                    SignalEvent::Signal { from, to, signal } => {
-                                        if to.deref() == peer_id.deref() {
-                                            let mut conns = wrtc_conns.write().await;
-                                            let had_already = conns.contains_key(from.deref());
-                                            let remote_peer_id: PeerId = Arc::from(from.deref());
-                                            let conn = Connection::new(
-                                                awareness.clone(),
-                                                Arc::downgrade(&conn),
-                                                true,
-                                                remote_peer_id.clone(),
-                                                room_ref.clone(),
-                                            )
-                                            .await;
-                                            match conn {
-                                                Ok(conn) => {
-                                                    conn.signal(signal.clone()).await.unwrap();
-                                                    if let Err(e) = conn.connected().await {
-                                                        log::error!("failed to establish connection with peer '{remote_peer_id}': {e}");
-                                                    }
-                                                    let prev = conns.insert(remote_peer_id, conn);
-                                                    if let Some(c) = prev {
-                                                        //let _ = c.close().await; //TODO: wait until webrtc::RTCConnection::close is Send
-                                                        // probably already failed connection
-                                                    }
-                                                    if !had_already {
-                                                        let _ = peers_tx.send(PeerEvent::Up(
-                                                            Arc::from(from.deref()),
-                                                        ));
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    log::error!("failed to establish connection with peer '{remote_peer_id}': {e}");
-                                                }
+                                            Err(e) => {
+                                                log::trace!("'{peer_id}' failed to init connection to '{remote_peer_id}': {e}");
                                             }
                                         }
                                     }
                                 }
                             }
-                            _ => { /* ignore */ }
+                            SignalEvent::Signal { from, to, signal } => {
+                                if to.deref() == peer_id.deref() {
+                                    let mut conns = wrtc_conns.write().await;
+                                    let remote_peer_id = PeerId::from(from.deref());
+                                    let result = match conns.entry(remote_peer_id.clone()) {
+                                        Entry::Occupied(mut e) => {
+                                            let conn = e.get_mut();
+                                            conn.apply(signal.clone()).await
+                                        }
+                                        Entry::Vacant(e) => {
+                                            log::trace!("'{peer_id}' setting up connection to '{remote_peer_id}' as an acceptor");
+                                            let result = Connection::new(
+                                                awareness.clone(),
+                                                Arc::downgrade(&conn),
+                                                false,
+                                                remote_peer_id.clone(),
+                                                room_ref.clone(),
+                                            )
+                                            .await;
+                                            match result {
+                                                Ok(conn) => {
+                                                    let conn = e.insert(conn);
+                                                    conn.apply(signal.clone()).await
+                                                }
+                                                Err(e) => Err(e),
+                                            }
+                                        }
+                                    };
+                                    if let Err(e) = result {
+                                        log::trace!("'{peer_id}' failed to process signal from '{remote_peer_id}': {e}");
+                                    }
+                                }
+                            }
                         }
                     }
+                    _ => { /* ignore */ }
                 }
-            });
-            signaling_msg_handlers.push(job);
+            }
         }
-        room
     }
 
     pub fn name(&self) -> &Topic {

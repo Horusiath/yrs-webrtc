@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -38,7 +38,8 @@ impl SignalingConn {
                 if msg.is_text() || msg.is_binary() {
                     let parsed: Message = serde_json::from_slice(&msg.into_data())?;
                     if let Message::Publish { .. } = parsed {
-                        broadcast_sender.send(Arc::new(parsed))?;
+                        let msg = Arc::new(parsed);
+                        broadcast_sender.send(msg)?;
                     }
                 }
             }
@@ -67,7 +68,7 @@ impl SignalingConn {
     pub async fn send<'a>(&self, msg: &Message<'a>) -> Result<()> {
         let mut sink = self.sender.lock().await;
         let json = msg.to_json()?;
-        sink.send(WsMessage::text(json)).await?;
+        sink.send(WsMessage::text(json.clone())).await?;
         Ok(())
     }
 

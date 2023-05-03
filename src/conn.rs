@@ -1,10 +1,10 @@
 use crate::room::Room;
-use crate::signal::{SignalEvent, SignalingConn};
+use crate::signal::{PeerEvent, SignalEvent, SignalingConn};
 use crate::{AwarenessRef, Error, PeerId, Result};
 use arc_swap::ArcSwapOption;
 use bytes::Bytes;
 use futures_util::stream::SplitSink;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use std::borrow::Cow;
 use std::fmt::Formatter;
 use std::ops::Deref;
@@ -26,8 +26,9 @@ pub struct Connection {
     peer: Arc<PeerConnection>,
     awareness: AwarenessRef,
     signaling_job: JoinHandle<Result<()>>,
+    on_connected: JoinHandle<Result<()>>,
     room: Weak<Room>,
-    connected: ArcSwapOption<ConnectedState>,
+    connected: Arc<ArcSwapOption<ConnectedState>>,
 }
 
 impl Connection {
@@ -40,6 +41,7 @@ impl Connection {
     ) -> Result<Self> {
         let room_ref = room.upgrade().unwrap();
         let options = wrtc::peer_connection::Options::with_data_channels(&[&room_ref.name()]);
+        let peer_events = room_ref.peer_events().clone();
         let peer = Arc::new(PeerConnection::start(initiator, options).await?);
 
         let signaling_job = {
@@ -49,7 +51,7 @@ impl Connection {
             let signaling_conn = signaling_conn.clone();
             let remote_peer_id = remote_peer_id.clone();
             tokio::spawn(async move {
-                while let Some(signal) = peer.listen().await {
+                while let Some(signal) = peer.signal().await {
                     if let Some(conn) = signaling_conn.upgrade() {
                         let msg = crate::signal::Message::Publish {
                             topic: Cow::from(topic.deref()),
@@ -68,67 +70,74 @@ impl Connection {
             })
         };
 
+        let connected = Arc::new(ArcSwapOption::new(None));
+        let on_connected = {
+            let peer = peer.clone();
+            let awareness = awareness.clone();
+            let connected = connected.clone();
+            let remote_peer_id = remote_peer_id.clone();
+            tokio::spawn(async move {
+                peer.connected().await?;
+                let channel = peer.data_channels().next().await.unwrap();
+                channel.ready().await?;
+
+                let (sink, mut stream) = channel.split();
+                let sink = Arc::new(Mutex::new(sink));
+                let is_synced = Arc::new(AtomicBool::new(false));
+
+                {
+                    let awareness = awareness.read().await;
+                    let update = awareness.update()?;
+                    let msg = y_sync::sync::Message::Sync(SyncMessage::SyncStep1(
+                        awareness.doc().transact().state_vector(),
+                    ));
+                    let mut sink = sink.lock().await;
+                    sink.send(Bytes::from(msg.encode_v1())).await?;
+                    let msg = y_sync::sync::Message::Awareness(update);
+                    sink.send(Bytes::from(msg.encode_v1())).await?;
+                }
+
+                let msg_job: JoinHandle<Result<()>> = {
+                    let sink = Arc::downgrade(&sink);
+                    let awareness = awareness.clone();
+                    let is_synced = is_synced.clone();
+                    tokio::spawn(async move {
+                        while let Some(msg) = stream.next().await {
+                            let msg = y_sync::sync::Message::decode_v1(&msg?.data)?;
+                            let reply =
+                                handle_msg(&DefaultProtocol, &awareness, msg, &is_synced).await?;
+                            if let Some(reply) = reply {
+                                if let Some(sink) = sink.upgrade() {
+                                    let mut sink = sink.lock().await;
+                                    let bytes = Bytes::from(reply.encode_v1());
+                                    sink.send(bytes).await?;
+                                }
+                            }
+                        }
+                        Ok(())
+                    })
+                };
+
+                let state = ConnectedState {
+                    msg_job,
+                    is_synced,
+                    channel: sink,
+                };
+                connected.swap(Some(Arc::new(state)));
+                let _ = peer_events.send(PeerEvent::Up(remote_peer_id));
+                Ok(())
+            })
+        };
+
         Ok(Connection {
             remote_peer_id,
             awareness,
             peer,
             room,
             signaling_job,
-            connected: ArcSwapOption::new(None),
+            on_connected,
+            connected,
         })
-    }
-
-    pub async fn connected(&self) -> Result<()> {
-        if self.connected.load().is_none() {
-            self.peer.connected().await?;
-            let channel = self.peer.data_channels().next().await.unwrap();
-            channel.ready().await?;
-
-            let (sink, mut stream) = channel.split();
-            let sink = Arc::new(Mutex::new(sink));
-            let is_synced = Arc::new(AtomicBool::new(false));
-
-            {
-                let awareness = self.awareness.read().await;
-                let update = awareness.update()?;
-                let msg = y_sync::sync::Message::Sync(SyncMessage::SyncStep1(
-                    awareness.doc().transact().state_vector(),
-                ));
-                let mut sink = sink.lock().await;
-                sink.send(Bytes::from(msg.encode_v1())).await?;
-                let msg = y_sync::sync::Message::Awareness(update);
-                sink.send(Bytes::from(msg.encode_v1())).await?;
-            }
-
-            let msg_job: JoinHandle<Result<()>> = {
-                let sink = Arc::downgrade(&sink);
-                let awareness = self.awareness.clone();
-                let is_synced = is_synced.clone();
-                tokio::spawn(async move {
-                    while let Some(msg) = stream.next().await {
-                        let msg = y_sync::sync::Message::decode_v1(&msg?.data)?;
-                        let reply =
-                            handle_msg(&DefaultProtocol, &awareness, msg, &is_synced).await?;
-                        if let Some(reply) = reply {
-                            if let Some(sink) = sink.upgrade() {
-                                let mut sink = sink.lock().await;
-                                let bytes = Bytes::from(reply.encode_v1());
-                                sink.send(bytes).await?;
-                            }
-                        }
-                    }
-                    Ok(())
-                })
-            };
-
-            let connected = ConnectedState {
-                msg_job,
-                is_synced,
-                channel: sink,
-            };
-            self.connected.swap(Some(Arc::new(connected)));
-        }
-        Ok(())
     }
 
     pub fn is_synced(&self) -> bool {
@@ -139,8 +148,8 @@ impl Connection {
         }
     }
 
-    pub async fn signal(&self, signal: Signal) -> Result<()> {
-        self.peer.signal(signal).await?;
+    pub async fn apply(&self, signal: Signal) -> Result<()> {
+        self.peer.apply_signal(signal).await?;
         Ok(())
     }
 
