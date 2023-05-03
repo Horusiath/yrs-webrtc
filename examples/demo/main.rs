@@ -13,7 +13,7 @@ use yrs_warp::signaling::{signaling_conn, SignalingService};
 use yrs_webrtc::signal::PeerEvent;
 use yrs_webrtc::{Error, Room, SignalingConn};
 
-const STATIC_FILES_DIR: &str = "examples/webrtc-signaling-server/frontend/dist";
+const STATIC_FILES_DIR: &str = "examples/demo/frontend/dist";
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -23,8 +23,6 @@ async fn main() -> Result<(), Error> {
         .try_init();
 
     let server = tokio::spawn(signaling_server());
-
-    let _ = tokio::spawn(signaling_server());
     sleep(Duration::from_secs(1)).await;
 
     let c1 = Arc::new(SignalingConn::connect("ws://localhost:8000/signaling").await?);

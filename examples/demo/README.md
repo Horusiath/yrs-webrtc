@@ -6,7 +6,7 @@ In order to generate static website content, first you need build it. This can b
 ```bash
 npm i --global rollup
 
-cd examples/webrtc-signaling-server/frontend
+cd examples/demo/frontend
 npm run build
 ```
 
