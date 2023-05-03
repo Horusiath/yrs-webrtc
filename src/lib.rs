@@ -49,28 +49,24 @@ mod test {
         try_join(r1.connect(), r2.connect()).await?;
 
         // confirm peers noticed each other
-        println!("confirming peers noticed each other");
         let e = pe1.recv().await?;
         assert_eq!(e, PeerEvent::Up(r2.peer_id().clone()));
         let e = pe2.recv().await?;
         assert_eq!(e, PeerEvent::Up(r1.peer_id().clone()));
 
         // subscribe to document updates on R1
-        println!("subscribe to document updates on R1");
         let (tx, mut rx) = tokio::sync::watch::channel(());
         let _sub = {
             let awareness = r1.awareness().write().await;
             let doc = awareness.doc();
             let _ = doc.get_or_insert_text("test");
             doc.observe_update_v1(move |_, _| {
-                println!("received update");
                 let _ = tx.send(());
             })
             //.unwrap()
         };
 
         // make change on R2
-        println!("make change on R2");
         {
             let awareness = r2.awareness().write().await;
             let doc = awareness.doc();
@@ -78,11 +74,9 @@ mod test {
             text.push(&mut doc.transact_mut(), "abc");
         }
 
-        println!("wait for change to be propagated to R1");
         rx.changed().await?; // wait for change to be propagated to R1
 
         // check change on R1
-        println!("check change on R1");
         {
             let awareness = r1.awareness().read().await;
             let doc = awareness.doc();

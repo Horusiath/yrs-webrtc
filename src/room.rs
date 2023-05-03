@@ -331,12 +331,11 @@ impl Room {
         }
 
         {
-            let conns = self.wrtc_conns.read().await;
+            let conns = self.wrtc_conns.write().await;
             for (peer_id, conn) in conns.iter() {
                 let _ = conn.close().await;
             }
         }
-
         Ok(())
     }
 }

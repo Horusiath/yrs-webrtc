@@ -7,7 +7,8 @@ use tokio::try_join;
 use warp::ws::{WebSocket, Ws};
 use warp::{Filter, Rejection, Reply};
 use y_sync::awareness::Awareness;
-use yrs::{GetString, Text, Transact};
+use yrs::updates::decoder::Decode;
+use yrs::{GetString, Text, Transact, Update};
 use yrs_warp::signaling::{signaling_conn, SignalingService};
 use yrs_webrtc::signal::PeerEvent;
 use yrs_webrtc::{Error, Room, SignalingConn};
@@ -17,55 +18,36 @@ const STATIC_FILES_DIR: &str = "examples/webrtc-signaling-server/frontend/dist";
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let _ = env_logger::builder()
-        .filter_level(LevelFilter::Trace)
+        .filter_level(LevelFilter::Error)
         .is_test(true)
         .try_init();
 
-    let x = tokio::spawn(signaling_server());
+    let server = tokio::spawn(signaling_server());
 
     let _ = tokio::spawn(signaling_server());
     sleep(Duration::from_secs(1)).await;
 
     let c1 = Arc::new(SignalingConn::connect("ws://localhost:8000/signaling").await?);
     let r1 = Room::open("test-room", Awareness::default(), [c1]);
-    let c2 = Arc::new(SignalingConn::connect("ws://localhost:8000/signaling").await?);
-    let r2 = Room::open("test-room", Awareness::default(), [c2]);
     let mut pe1 = r1.peer_events().subscribe();
-    let mut pe2 = r2.peer_events().subscribe();
 
-    try_join(r1.connect(), r2.connect()).await?;
+    r1.connect().await?;
 
-    let e = pe1.recv().await?;
-    assert_eq!(e, PeerEvent::Up(r2.peer_id().clone()));
-    let e = pe2.recv().await?;
-    assert_eq!(e, PeerEvent::Up(r1.peer_id().clone()));
+    let _ = tokio::spawn(async move {
+        while let Ok(e) = pe1.recv().await {
+            println!("received peer event: {e:?}");
+        }
+    });
 
-    let (s, mut rx) = tokio::sync::watch::channel(());
     let _sub = {
         let a = r1.awareness().write().await;
         a.doc().observe_update_v1(move |txn, u| {
-            let _ = s.send(());
+            let u = Update::decode_v1(&u.update).unwrap();
+            println!("received update: {u:?}");
         })
     };
 
-    {
-        let a = r2.awareness().write().await;
-        let doc = a.doc();
-        let txt = doc.get_or_insert_text("text");
-        txt.push(&mut doc.transact_mut(), "abc");
-    }
-
-    rx.changed().await?;
-
-    {
-        let a = r1.awareness().write().await;
-        let doc = a.doc();
-        let txt = doc.get_or_insert_text("text");
-        let str = txt.get_string(&doc.transact());
-        assert_eq!(str, "abc");
-    }
-
-    try_join(r1.close(), r2.close()).await?;
+    server.await?;
 
     Ok(())
 }

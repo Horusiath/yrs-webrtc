@@ -166,10 +166,6 @@ impl Connection {
     pub async fn close(&self) -> Result<()> {
         self.peer.close().await?;
         self.connected.swap(None);
-        if let Some(room) = self.room.upgrade() {
-            room.remove_conn(&self.remote_peer_id).await;
-            room.announce_signaling_info().await?;
-        }
         Ok(())
     }
 }
