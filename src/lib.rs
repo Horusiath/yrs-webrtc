@@ -36,12 +36,12 @@ mod test {
         //    .filter_level(LevelFilter::Info)
         //    .is_test(true)
         //    .try_init();
-        let _ = tokio::spawn(signaling_server());
-        sleep(Duration::from_secs(1)).await;
+        let _ = tokio::spawn(signaling_server(15001));
+        sleep(Duration::from_millis(100)).await;
 
-        let c1 = Arc::new(SignalingConn::connect("ws://localhost:8000/signaling").await?);
+        let c1 = Arc::new(SignalingConn::connect("ws://localhost:15001/signaling").await?);
         let r1 = Room::open("test-room", Awareness::default(), [c1]);
-        let c2 = Arc::new(SignalingConn::connect("ws://localhost:8000/signaling").await?);
+        let c2 = Arc::new(SignalingConn::connect("ws://localhost:15001/signaling").await?);
         let r2 = Room::open("test-room", Awareness::default(), [c2]);
         let mut pe1 = r1.peer_events().subscribe();
         let mut pe2 = r2.peer_events().subscribe();
@@ -91,14 +91,57 @@ mod test {
         Ok(())
     }
 
-    async fn signaling_server() {
+    #[tokio::test]
+    async fn disconnect_events() -> Result<(), Error> {
+        //let _ = env_logger::builder()
+        //    .filter_level(LevelFilter::Info)
+        //    .is_test(true)
+        //    .try_init();
+        let _ = tokio::spawn(signaling_server(15002));
+        sleep(Duration::from_millis(100)).await;
+
+        let c1 = Arc::new(SignalingConn::connect("ws://localhost:15002/signaling").await?);
+        let r1 = Room::open("test-room", Awareness::default(), [c1]);
+        let c2 = Arc::new(SignalingConn::connect("ws://localhost:15002/signaling").await?);
+        let r2 = Room::open("test-room", Awareness::default(), [c2]);
+        let mut pe1 = r1.peer_events().subscribe();
+        let mut pe2 = r2.peer_events().subscribe();
+
+        try_join(r1.connect(), r2.connect()).await?;
+
+        // confirm peers noticed each other
+        let peer_id1 = r1.peer_id().clone();
+        let peer_id2 = r2.peer_id().clone();
+        let e = pe1.recv().await?;
+        assert_eq!(e, PeerEvent::Up(peer_id2.clone()));
+        let e = pe2.recv().await?;
+        assert_eq!(e, PeerEvent::Up(peer_id1.clone()));
+
+        drop(pe2);
+        r2.close().await?;
+        drop(r2);
+
+        {
+            let awareness = r1.awareness().write().await;
+            let doc = awareness.doc();
+            let text = doc.get_or_insert_text("test");
+            text.push(&mut doc.transact_mut(), "abc");
+        }
+
+        let e = timeout(Duration::from_secs(5), pe1.recv()).await??;
+        assert_eq!(e, PeerEvent::Down(peer_id2.clone()));
+
+        Ok(())
+    }
+
+    async fn signaling_server(port: u16) {
         let signaling = SignalingService::new();
         let ws = warp::path("signaling")
             .and(warp::ws())
             .and(warp::any().map(move || signaling.clone()))
             .and_then(ws_handler);
 
-        warp::serve(ws).run(([0, 0, 0, 0], 8000)).await;
+        warp::serve(ws).run(([0, 0, 0, 0], port)).await;
     }
 
     async fn ws_handler(ws: Ws, svc: SignalingService) -> Result<impl Reply, Rejection> {

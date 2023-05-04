@@ -10,7 +10,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -29,12 +29,12 @@ pub struct Room {
     awareness: AwarenessRef,
     signaling_conns: Arc<[Arc<SignalingConn>]>,
     signaling_msg_handlers: Vec<JoinHandle<()>>,
-    wrtc_conns: Arc<RwLock<HashMap<Arc<str>, Connection>>>,
     max_conns: usize,
     update_sub: UpdateSubscription,
     awareness_update_sub: y_sync::awareness::UpdateSubscription,
     broadcast_job: JoinHandle<()>,
     peer_events: PeerEvents,
+    pub(crate) wrtc_conns: Arc<RwLock<HashMap<Arc<str>, Connection>>>,
 }
 
 impl Room {
@@ -133,15 +133,15 @@ impl Room {
                 .unwrap()
         };
         for conn in signaling_conns.iter().cloned() {
-            let job = tokio::spawn(Room::subscribe(room.clone(), conn));
+            let job = tokio::spawn(Room::subscribe(Arc::downgrade(&room), conn));
             signaling_msg_handlers.push(job);
         }
         room
     }
 
     /// Subscribes for the [Message]s incoming from the WebSocket server.
-    async fn subscribe(room: Arc<Room>, conn: Arc<SignalingConn>) {
-        let room_ref = Arc::downgrade(&room);
+    async fn subscribe(room_ref: Weak<Room>, conn: Arc<SignalingConn>) {
+        let room = room_ref.upgrade().unwrap();
         let mut msgs = conn.subscribe();
         let room_name = room.name.clone();
         let max_conns = room.max_conns;
@@ -149,6 +149,8 @@ impl Room {
         let wrtc_conns = Arc::downgrade(&room.wrtc_conns);
         let peers_tx = room.peer_events.clone();
         let awareness = room.awareness.clone();
+        drop(room);
+
         let mut msgs = conn.subscribe();
         while let Ok(msg) = msgs.recv().await {
             if let Some(wrtc_conns) = wrtc_conns.upgrade() {

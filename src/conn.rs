@@ -27,6 +27,7 @@ pub struct Connection {
     awareness: AwarenessRef,
     signaling_job: JoinHandle<Result<()>>,
     on_connected: JoinHandle<Result<()>>,
+    on_closed: JoinHandle<Result<()>>,
     room: Weak<Room>,
     connected: Arc<ArcSwapOption<ConnectedState>>,
 }
@@ -129,6 +130,24 @@ impl Connection {
             })
         };
 
+        let on_closed = {
+            let peer = peer.clone();
+            let room = room.clone();
+            let remote_peer_id = remote_peer_id.clone();
+            tokio::spawn(async move {
+                let res = peer.closed().await;
+                if let Some(room) = room.upgrade() {
+                    println!("'{remote_peer_id}' close called");
+                    {
+                        let mut conns = room.wrtc_conns.write().await;
+                        conns.remove(&remote_peer_id);
+                    }
+                    let _ = room.peer_events().send(PeerEvent::Down(remote_peer_id));
+                }
+                res.map_err(|e| e.into())
+            })
+        };
+
         Ok(Connection {
             remote_peer_id,
             awareness,
@@ -136,6 +155,7 @@ impl Connection {
             room,
             signaling_job,
             on_connected,
+            on_closed,
             connected,
         })
     }
