@@ -136,7 +136,6 @@ impl Connection {
             tokio::spawn(async move {
                 let res = peer.closed().await;
                 if let Some(room) = room.upgrade() {
-                    println!("'{remote_peer_id}' close called");
                     {
                         let mut conns = room.wrtc_conns.write().await;
                         conns.remove(&remote_peer_id);
