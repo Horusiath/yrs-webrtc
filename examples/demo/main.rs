@@ -26,7 +26,7 @@ async fn main() -> Result<(), Error> {
     sleep(Duration::from_secs(1)).await;
 
     let c1 = Arc::new(SignalingConn::connect("ws://localhost:8000/signaling").await?);
-    let r1 = Room::open("test-room", Awareness::default(), [c1]);
+    let r1 = Room::open("sample", Awareness::default(), [c1]);
     let mut pe1 = r1.peer_events().subscribe();
 
     r1.connect().await?;

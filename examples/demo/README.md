@@ -15,7 +15,8 @@ These commands will install and run [rollup.js](https://rollupjs.org/), which is
 Once the steps above are done, a `./frontent/dist` directory should appear. If so, all you need to do is to run following command from the *main git repository directory*:
 
 ```bash
-cargo run --example webrtc-signaling-server
+cargo run --example demo
 ```
 
 It will run a local warp server with an index page at [http://localhost:8000](http://localhost:8000).
+You can use code mirror editor rendered on that page and observe how the changes are propagates to yrs-webrtc peer running in the same process as server.
