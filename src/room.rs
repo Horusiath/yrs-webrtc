@@ -3,7 +3,6 @@ use crate::signal::{PeerEvent, SignalEvent, SignalingConn};
 use crate::{AwarenessRef, PeerId, Topic};
 use crate::{Error, Result};
 use bytes::Bytes;
-use futures_util::future::try_join_all;
 use lib0::encoding::Write;
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
@@ -11,17 +10,15 @@ use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use wrtc::peer_connection::Signal;
 use y_sync::awareness::Awareness;
-use y_sync::sync::{DefaultProtocol, Message, SyncMessage, MSG_SYNC_UPDATE};
+use y_sync::sync::{Message, SyncMessage, MSG_SYNC_UPDATE};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::{uuid_v4, ReadTxn, Transact, UpdateSubscription};
 
 pub(crate) const MSG_SYNC: u8 = 0;
-pub(crate) const MSG_QUERY_AWARENESS: u8 = 3;
 
 pub struct Room {
     peer_id: PeerId,
@@ -53,7 +50,7 @@ impl Room {
         signaling_conns: Arc<[Arc<SignalingConn>]>,
         max_conns: usize,
     ) -> Arc<Self> {
-        let mut peer_id = uuid_v4(&mut rand::thread_rng());
+        let peer_id = uuid_v4(&mut rand::thread_rng());
         let doc = awareness.doc();
         let wrtc_conns: Arc<RwLock<HashMap<Arc<str>, Connection>>> =
             Arc::new(RwLock::new(HashMap::new()));
@@ -95,7 +92,7 @@ impl Room {
                         let mut remove = Vec::new();
                         for (peer_id, conn) in conns.iter_mut() {
                             let msg = Bytes::from(msg.clone());
-                            if let Err(cause) = conn.send(msg).await {
+                            if let Err(_cause) = conn.send(msg).await {
                                 remove.push(peer_id.clone());
                             }
                         }
@@ -113,7 +110,7 @@ impl Room {
         };
         let awareness = Arc::new(RwLock::new(awareness));
         let signaling_msg_handlers = Vec::with_capacity(signaling_conns.len());
-        let mut room = Arc::new(Room {
+        let room = Arc::new(Room {
             peer_id,
             name: name.clone(),
             awareness,
@@ -142,12 +139,10 @@ impl Room {
     /// Subscribes for the [Message]s incoming from the WebSocket server.
     async fn subscribe(room_ref: Weak<Room>, conn: Arc<SignalingConn>) {
         let room = room_ref.upgrade().unwrap();
-        let mut msgs = conn.subscribe();
         let room_name = room.name.clone();
         let max_conns = room.max_conns;
         let peer_id = room.peer_id.clone();
         let wrtc_conns = Arc::downgrade(&room.wrtc_conns);
-        let peers_tx = room.peer_events.clone();
         let awareness = room.awareness.clone();
         drop(room);
 
@@ -306,7 +301,7 @@ impl Room {
             let sync_step1 = Bytes::from(Message::Sync(SyncMessage::SyncStep1(sv)).encode_v1());
             let awareness_query = Bytes::from(Message::AwarenessQuery.encode_v1());
             let conns = self.wrtc_conns.read().await;
-            for (remote_peer_id, conn) in conns.iter() {
+            for (_remote_peer_id, conn) in conns.iter() {
                 conn.send(sync_step1.clone()).await?;
                 conn.send(awareness_query.clone()).await?;
             }
@@ -334,7 +329,7 @@ impl Room {
 
         {
             let conns = self.wrtc_conns.write().await;
-            for (peer_id, conn) in conns.iter() {
+            for (_peer_id, conn) in conns.iter() {
                 let _ = conn.close().await;
             }
         }

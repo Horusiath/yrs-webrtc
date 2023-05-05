@@ -1,16 +1,13 @@
-use futures_util::future::try_join;
 use log::LevelFilter;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use tokio::try_join;
 use warp::ws::{WebSocket, Ws};
 use warp::{Filter, Rejection, Reply};
 use y_sync::awareness::Awareness;
 use yrs::updates::decoder::Decode;
-use yrs::{GetString, Text, Transact, Update};
+use yrs::Update;
 use yrs_warp::signaling::{signaling_conn, SignalingService};
-use yrs_webrtc::signal::PeerEvent;
 use yrs_webrtc::{Error, Room, SignalingConn};
 
 const STATIC_FILES_DIR: &str = "examples/demo/frontend/dist";
@@ -39,7 +36,7 @@ async fn main() -> Result<(), Error> {
 
     let _sub = {
         let a = r1.awareness().write().await;
-        a.doc().observe_update_v1(move |txn, u| {
+        a.doc().observe_update_v1(move |_, u| {
             let u = Update::decode_v1(&u.update).unwrap();
             println!("received update: {u:?}");
         })

@@ -20,10 +20,9 @@ mod test {
     use crate::signal::PeerEvent;
     use crate::{Error, Room, SignalingConn};
     use futures_util::future::try_join;
-    use log::LevelFilter;
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::time::{sleep, timeout};
+    use tokio::time::sleep;
     use warp::ws::{WebSocket, Ws};
     use warp::{Filter, Rejection, Reply};
     use y_sync::awareness::Awareness;

@@ -1,16 +1,15 @@
 use crate::room::Room;
 use crate::signal::{PeerEvent, SignalEvent, SignalingConn};
-use crate::{AwarenessRef, Error, PeerId, Result};
+use crate::{AwarenessRef, PeerId, Result};
 use arc_swap::ArcSwapOption;
 use bytes::Bytes;
 use futures_util::stream::SplitSink;
-use futures_util::{SinkExt, StreamExt, TryStreamExt};
+use futures_util::{SinkExt, StreamExt};
 use std::borrow::Cow;
 use std::fmt::Formatter;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
-use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use wrtc::data_channel::DataChannel;
