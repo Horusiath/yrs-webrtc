@@ -3,7 +3,6 @@ use crate::signal::{PeerEvent, SignalEvent, SignalingConn};
 use crate::{AwarenessRef, PeerId, Topic};
 use crate::{Error, Result};
 use bytes::Bytes;
-use lib0::encoding::Write;
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -15,11 +14,13 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use y_sync::awareness::Awareness;
 use y_sync::sync::{Message, SyncMessage, MSG_SYNC_UPDATE};
+use yrs::encoding::write::Write;
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::{uuid_v4, ReadTxn, Transact, UpdateSubscription};
 
 pub(crate) const MSG_SYNC: u8 = 0;
 
+#[allow(dead_code)]
 pub struct Room {
     peer_id: PeerId,
     name: Topic,
