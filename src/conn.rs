@@ -19,6 +19,7 @@ use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{ReadTxn, Transact, Update};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Connection {
     remote_peer_id: PeerId,
@@ -188,6 +189,7 @@ impl Connection {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct ConnectedState {
     msg_job: JoinHandle<Result<()>>,
