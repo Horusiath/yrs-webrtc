@@ -1,6 +1,6 @@
 [package]
 name = "yrs-webrtc"
-version = "0.1.0"
+version = "0.2.0"
 description = "WebRTC network connector for Yjs/Yrs document update exchange"
 license = "MIT"
 authors = ["Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
