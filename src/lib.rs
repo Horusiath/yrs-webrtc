@@ -2,6 +2,7 @@ pub mod conn;
 pub mod room;
 pub mod signal;
 
+use futures_util::Stream;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use y_sync::awareness::Awareness;
@@ -12,8 +13,22 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Topic = Arc<str>;
 pub type PeerId = Arc<str>;
-pub type Room = crate::room::Room;
-pub type SignalingConn = crate::signal::SignalingConn;
+pub type Room = room::Room;
+pub type WSSignalingConn = signal::WSSignalingConn;
+
+/// Trait used by signaling connections. Since WebRTC doesn't specify details of connection negotiation,
+/// the purpose of signaling connection is to facilitate signaling messages using another protocol in order
+/// discover other WebRTC clients and negotiate the connection details.
+#[async_trait::async_trait]
+pub trait SignalingConn: Send + Sync + Unpin {
+    /// Method used to send the signaling messages created by the current WebRTC connection.
+    async fn send(&self, msg: &signal::Message) -> Result<()>;
+
+    /// Returns a stream of incoming signaling messages from other WebRTC connections.
+    fn subscribe(
+        &self,
+    ) -> Box<dyn Stream<Item = Result<Arc<signal::Message<'static>>>> + Send + Sync + Unpin>;
+}
 
 #[cfg(test)]
 mod test {

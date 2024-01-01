@@ -1,6 +1,6 @@
 use crate::conn::Connection;
-use crate::signal::{PeerEvent, SignalEvent, SignalingConn};
-use crate::{AwarenessRef, PeerId, Topic};
+use crate::signal::{PeerEvent, SignalEvent};
+use crate::{AwarenessRef, PeerId, SignalingConn, Topic};
 use crate::{Error, Result};
 use bytes::Bytes;
 use std::borrow::Cow;
@@ -25,7 +25,7 @@ pub struct Room {
     peer_id: PeerId,
     name: Topic,
     awareness: AwarenessRef,
-    signaling_conns: Arc<[Arc<SignalingConn>]>,
+    signaling_conns: Arc<[Arc<dyn SignalingConn>]>,
     signaling_msg_handlers: Vec<JoinHandle<()>>,
     max_conns: usize,
     update_sub: UpdateSubscription,
@@ -39,16 +39,16 @@ impl Room {
     pub fn open<T, I>(name: T, awareness: Awareness, signaling_conns: I) -> Arc<Self>
     where
         Arc<str>: From<T>,
-        I: IntoIterator<Item = Arc<SignalingConn>>,
+        I: IntoIterator<Item = Arc<dyn SignalingConn>>,
     {
-        let signaling_conns: Arc<[Arc<SignalingConn>]> = signaling_conns.into_iter().collect();
+        let signaling_conns: Arc<[Arc<dyn SignalingConn>]> = signaling_conns.into_iter().collect();
         Self::create_internal(Topic::from(name), awareness, signaling_conns, 24)
     }
 
     pub fn create_internal(
         name: Topic,
         mut awareness: Awareness,
-        signaling_conns: Arc<[Arc<SignalingConn>]>,
+        signaling_conns: Arc<[Arc<dyn SignalingConn>]>,
         max_conns: usize,
     ) -> Arc<Self> {
         let peer_id = uuid_v4(&mut rand::thread_rng());
@@ -138,7 +138,9 @@ impl Room {
     }
 
     /// Subscribes for the [Message]s incoming from the WebSocket server.
-    async fn subscribe(room_ref: Weak<Room>, conn: Arc<SignalingConn>) {
+    async fn subscribe(room_ref: Weak<Room>, conn: Arc<dyn SignalingConn>) {
+        use futures_util::StreamExt;
+
         let room = room_ref.upgrade().unwrap();
         let room_name = room.name.clone();
         let max_conns = room.max_conns;
@@ -148,7 +150,14 @@ impl Room {
         drop(room);
 
         let mut msgs = conn.subscribe();
-        while let Ok(msg) = msgs.recv().await {
+        while let Some(res) = msgs.next().await {
+            let msg = match res {
+                Ok(msg) => msg,
+                Err(e) => {
+                    log::trace!("'{peer_id}' received error from signaling connection: {e}");
+                    return;
+                }
+            };
             if let Some(wrtc_conns) = wrtc_conns.upgrade() {
                 match msg.deref() {
                     crate::signal::Message::Publish { topic, data }
@@ -348,7 +357,6 @@ impl std::fmt::Debug for Room {
             .field("max_conns", &self.max_conns)
             .field("awareness", &self.awareness)
             .field("wrtc_conns", &self.wrtc_conns)
-            .field("signaling_conns", &self.signaling_conns)
             .finish()
     }
 }

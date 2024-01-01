@@ -1,6 +1,6 @@
 use crate::room::Room;
-use crate::signal::{PeerEvent, SignalEvent, SignalingConn};
-use crate::{AwarenessRef, PeerId, Result};
+use crate::signal::{PeerEvent, SignalEvent};
+use crate::{AwarenessRef, PeerId, Result, SignalingConn};
 use arc_swap::ArcSwapOption;
 use bytes::Bytes;
 use futures_util::stream::SplitSink;
@@ -35,7 +35,7 @@ pub struct Connection {
 impl Connection {
     pub async fn new(
         awareness: AwarenessRef,
-        signaling_conn: Weak<SignalingConn>,
+        signaling_conn: Weak<dyn SignalingConn>,
         initiator: bool,
         remote_peer_id: PeerId,
         room: Weak<Room>,

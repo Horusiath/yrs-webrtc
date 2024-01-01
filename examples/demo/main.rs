@@ -8,7 +8,7 @@ use y_sync::awareness::Awareness;
 use yrs::updates::decoder::Decode;
 use yrs::Update;
 use yrs_warp::signaling::{signaling_conn, SignalingService};
-use yrs_webrtc::{Error, Room, SignalingConn};
+use yrs_webrtc::{Error, Room, SignalingConn, WSSignalingConn};
 
 const STATIC_FILES_DIR: &str = "examples/demo/frontend/dist";
 
@@ -22,7 +22,8 @@ async fn main() -> Result<(), Error> {
     let server = tokio::spawn(signaling_server());
     sleep(Duration::from_secs(1)).await;
 
-    let c1 = Arc::new(SignalingConn::connect("ws://localhost:8000/signaling").await?);
+    let c1: Arc<dyn SignalingConn> =
+        Arc::new(WSSignalingConn::connect("ws://localhost:8000/signaling").await?);
     let r1 = Room::open("sample", Awareness::default(), [c1]);
     let mut pe1 = r1.peer_events().subscribe();
 

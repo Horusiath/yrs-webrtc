@@ -1,13 +1,16 @@
 use crate::room::Room;
-use crate::{PeerId, Result};
+use crate::{PeerId, Result, SignalingConn};
 use arc_swap::ArcSwapOption;
 use futures_util::stream::SplitSink;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{ready, SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::ops::Deref;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::net::TcpStream;
+use tokio::pin;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
@@ -17,14 +20,14 @@ use url::Url;
 /// Signaling connection, which uses WebSockets side lane connection to drive group subscription
 /// mechanism and signal exchange used for WebRTC offer/answer cycle.
 #[derive(Debug)]
-pub struct SignalingConn {
+pub struct WSSignalingConn {
     url: Arc<str>,
     broadcast: tokio::sync::broadcast::Sender<Arc<Message<'static>>>,
     msg_handler: ArcSwapOption<JoinHandle<Result<()>>>,
     sender: Mutex<WsSink>,
 }
 
-impl SignalingConn {
+impl WSSignalingConn {
     pub async fn connect<U: Into<Arc<str>>>(url: U) -> Result<Self> {
         let url = url.into();
         let parsed_url = Url::parse(&url)?;
@@ -37,6 +40,7 @@ impl SignalingConn {
                 let msg = msg?;
                 if msg.is_text() || msg.is_binary() {
                     let parsed: Message = serde_json::from_slice(&msg.into_data())?;
+                    log::trace!("signalling conn received: {:?}", parsed);
                     if let Message::Publish { .. } = parsed {
                         let msg = Arc::new(parsed);
                         broadcast_sender.send(msg)?;
@@ -46,7 +50,7 @@ impl SignalingConn {
             Ok(())
         });
 
-        Ok(SignalingConn {
+        Ok(WSSignalingConn {
             url,
             broadcast,
             msg_handler: ArcSwapOption::new(Some(Arc::new(msg_handler))),
@@ -54,7 +58,7 @@ impl SignalingConn {
         })
     }
 
-    /// Returns an URL of the server this [SignalingConn] has been connected to.
+    /// Returns an URL of the server this [WSSignalingConn] has been connected to.
     pub fn url(&self) -> &Arc<str> {
         &self.url
     }
@@ -66,6 +70,7 @@ impl SignalingConn {
 
     /// Sends a [Message] over current connection to the WebSocket server.
     pub async fn send<'a>(&self, msg: &Message<'a>) -> Result<()> {
+        log::trace!("signalling conn sending: {:?}", msg);
         let mut sink = self.sender.lock().await;
         let json = msg.to_json()?;
         sink.send(WsMessage::text(json.clone())).await?;
@@ -100,7 +105,7 @@ impl SignalingConn {
 
     /// Subscribes for the [Message]s incoming from the WebSocket server.
     pub fn subscribe(&self) -> SignalingMessages {
-        self.broadcast.subscribe()
+        SignalingMessages(self.broadcast.subscribe())
     }
 
     /// Closes current signaling connection.
@@ -128,7 +133,37 @@ impl SignalingConn {
     }
 }
 
-pub type SignalingMessages = tokio::sync::broadcast::Receiver<Arc<Message<'static>>>;
+#[async_trait::async_trait]
+impl SignalingConn for WSSignalingConn {
+    async fn send(&self, msg: &Message) -> Result<()> {
+        self.send(msg).await
+    }
+
+    fn subscribe(
+        &self,
+    ) -> Box<dyn Stream<Item = Result<Arc<Message<'static>>>> + Send + Sync + Unpin> {
+        Box::new(self.subscribe())
+    }
+}
+
+#[derive(Debug)]
+pub struct SignalingMessages(tokio::sync::broadcast::Receiver<Arc<Message<'static>>>);
+
+impl Stream for SignalingMessages {
+    type Item = Result<Arc<Message<'static>>>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        use futures_util::Future;
+
+        let mut pinned = unsafe { Pin::new_unchecked(&mut self.0) };
+        let fut = pinned.recv();
+        pin!(fut);
+        match ready!(fut.poll(cx)) {
+            Ok(msg) => Poll::Ready(Some(Ok(msg))),
+            Err(e) => Poll::Ready(Some(Err(e.into()))),
+        }
+    }
+}
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, WsMessage>;
 
