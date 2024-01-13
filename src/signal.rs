@@ -1,16 +1,15 @@
 use crate::room::Room;
 use crate::{PeerId, Result, SignalingConn};
 use arc_swap::ArcSwapOption;
+use async_stream::try_stream;
 use futures_util::stream::SplitSink;
-use futures_util::{ready, SinkExt, Stream, StreamExt};
+use futures_util::{SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use tokio::net::TcpStream;
-use tokio::pin;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
@@ -104,8 +103,13 @@ impl WSSignalingConn {
     }
 
     /// Subscribes for the [Message]s incoming from the WebSocket server.
-    pub fn subscribe(&self) -> SignalingMessages {
-        SignalingMessages(self.broadcast.subscribe())
+    pub fn signals(&self) -> impl Stream<Item = Result<Arc<Message<'static>>>> + Send + Sync {
+        let mut rx = self.broadcast.subscribe();
+        try_stream! {
+            while let Ok(msg) = rx.recv().await {
+                yield msg;
+            }
+        }
     }
 
     /// Closes current signaling connection.
@@ -141,27 +145,8 @@ impl SignalingConn for WSSignalingConn {
 
     fn subscribe(
         &self,
-    ) -> Box<dyn Stream<Item = Result<Arc<Message<'static>>>> + Send + Sync + Unpin> {
-        Box::new(self.subscribe())
-    }
-}
-
-#[derive(Debug)]
-pub struct SignalingMessages(tokio::sync::broadcast::Receiver<Arc<Message<'static>>>);
-
-impl Stream for SignalingMessages {
-    type Item = Result<Arc<Message<'static>>>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        use futures_util::Future;
-
-        let mut pinned = unsafe { Pin::new_unchecked(&mut self.0) };
-        let fut = pinned.recv();
-        pin!(fut);
-        match ready!(fut.poll(cx)) {
-            Ok(msg) => Poll::Ready(Some(Ok(msg))),
-            Err(e) => Poll::Ready(Some(Err(e.into()))),
-        }
+    ) -> Pin<Box<dyn Stream<Item = Result<Arc<Message<'static>>>> + Send + Sync>> {
+        Box::pin(self.signals())
     }
 }
 

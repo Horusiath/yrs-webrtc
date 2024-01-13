@@ -3,6 +3,7 @@ pub mod room;
 pub mod signal;
 
 use futures_util::Stream;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use y_sync::awareness::Awareness;
@@ -27,17 +28,17 @@ pub trait SignalingConn: Send + Sync + Unpin {
     /// Returns a stream of incoming signaling messages from other WebRTC connections.
     fn subscribe(
         &self,
-    ) -> Box<dyn Stream<Item = Result<Arc<signal::Message<'static>>>> + Send + Sync + Unpin>;
+    ) -> Pin<Box<dyn Stream<Item = Result<Arc<signal::Message<'static>>>> + Send + Sync>>;
 }
 
 #[cfg(test)]
 mod test {
     use crate::signal::PeerEvent;
-    use crate::{Error, Room, SignalingConn};
+    use crate::{Error, Room, SignalingConn, WSSignalingConn};
     use futures_util::future::try_join;
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::time::sleep;
+    use tokio::time::{sleep, timeout};
     use warp::ws::{WebSocket, Ws};
     use warp::{Filter, Rejection, Reply};
     use y_sync::awareness::Awareness;
@@ -47,15 +48,17 @@ mod test {
     #[tokio::test]
     async fn basic_message_exchange() -> Result<(), Error> {
         //let _ = env_logger::builder()
-        //    .filter_level(LevelFilter::Info)
+        //    .filter_level(log::LevelFilter::Trace)
         //    .is_test(true)
         //    .try_init();
         let _ = tokio::spawn(signaling_server(15001));
         sleep(Duration::from_millis(100)).await;
 
-        let c1 = Arc::new(SignalingConn::connect("ws://localhost:15001/signaling").await?);
+        let c1: Arc<dyn SignalingConn> =
+            Arc::new(WSSignalingConn::connect("ws://localhost:15001/signaling").await?);
         let r1 = Room::open("test-room", Awareness::default(), [c1]);
-        let c2 = Arc::new(SignalingConn::connect("ws://localhost:15001/signaling").await?);
+        let c2: Arc<dyn SignalingConn> =
+            Arc::new(WSSignalingConn::connect("ws://localhost:15001/signaling").await?);
         let r2 = Room::open("test-room", Awareness::default(), [c2]);
         let mut pe1 = r1.peer_events().subscribe();
         let mut pe2 = r2.peer_events().subscribe();
@@ -63,9 +66,9 @@ mod test {
         try_join(r1.connect(), r2.connect()).await?;
 
         // confirm peers noticed each other
-        let e = pe1.recv().await?;
+        let e = timeout(Duration::from_secs(1), pe1.recv()).await.unwrap()?;
         assert_eq!(e, PeerEvent::Up(r2.peer_id().clone()));
-        let e = pe2.recv().await?;
+        let e = timeout(Duration::from_secs(1), pe2.recv()).await.unwrap()?;
         assert_eq!(e, PeerEvent::Up(r1.peer_id().clone()));
 
         // subscribe to document updates on R1
@@ -77,7 +80,7 @@ mod test {
             doc.observe_update_v1(move |_, _| {
                 let _ = tx.send(());
             })
-            //.unwrap()
+            .unwrap()
         };
 
         // make change on R2
@@ -105,7 +108,7 @@ mod test {
         Ok(())
     }
 
-    /*TODO: how to trigger webrtc-rs to signal disconnected peer?
+    #[ignore]
     #[tokio::test]
     async fn disconnect_events() -> Result<(), Error> {
         //let _ = env_logger::builder()
@@ -115,9 +118,11 @@ mod test {
         let _ = tokio::spawn(signaling_server(15002));
         sleep(Duration::from_millis(100)).await;
 
-        let c1 = Arc::new(SignalingConn::connect("ws://localhost:15002/signaling").await?);
+        let c1: Arc<dyn SignalingConn> =
+            Arc::new(WSSignalingConn::connect("ws://localhost:15002/signaling").await?);
         let r1 = Room::open("test-room", Awareness::default(), [c1]);
-        let c2 = Arc::new(SignalingConn::connect("ws://localhost:15002/signaling").await?);
+        let c2: Arc<dyn SignalingConn> =
+            Arc::new(WSSignalingConn::connect("ws://localhost:15002/signaling").await?);
         let r2 = Room::open("test-room", Awareness::default(), [c2]);
         let mut pe1 = r1.peer_events().subscribe();
         let mut pe2 = r2.peer_events().subscribe();
@@ -148,7 +153,6 @@ mod test {
 
         Ok(())
     }
-    */
 
     async fn signaling_server(port: u16) {
         let signaling = SignalingService::new();

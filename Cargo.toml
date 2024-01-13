@@ -31,6 +31,7 @@ futures-util = {version = "0.3", features = ["sink"] }
 tokio-util = "0.7"
 arc-swap = "1.6"
 async-trait = "0.1.76"
+async-stream = "0.3.5"
 
 [dev-dependencies]
 env_logger = "0.10"
