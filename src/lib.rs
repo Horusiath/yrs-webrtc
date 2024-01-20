@@ -1,6 +1,7 @@
 pub mod conn;
 pub mod room;
 pub mod signal;
+pub mod zeroconf;
 
 use futures_util::Stream;
 use std::pin::Pin;
@@ -23,7 +24,7 @@ pub type WSSignalingConn = signal::WSSignalingConn;
 #[async_trait::async_trait]
 pub trait SignalingConn: Send + Sync + Unpin {
     /// Method used to send the signaling messages created by the current WebRTC connection.
-    async fn send(&self, msg: &signal::Message) -> Result<()>;
+    async fn send<'a>(&self, msg: &signal::Message<'a>) -> Result<()>;
 
     /// Returns a stream of incoming signaling messages from other WebRTC connections.
     fn subscribe(
@@ -33,9 +34,12 @@ pub trait SignalingConn: Send + Sync + Unpin {
 
 #[cfg(test)]
 mod test {
-    use crate::signal::PeerEvent;
+    use crate::signal::{Message, PeerEvent};
     use crate::{Error, Room, SignalingConn, WSSignalingConn};
+    use async_stream::try_stream;
     use futures_util::future::try_join;
+    use futures_util::Stream;
+    use std::pin::Pin;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::{sleep, timeout};

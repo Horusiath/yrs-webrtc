@@ -16,6 +16,7 @@ readme = "./README.md"
 yrs = "0.17"
 y-sync = { version = "0.4", features = ["net"] }
 wrtc = "0.3"
+webrtc = "0.9"
 log = "0.4"
 thiserror = "1.0"
 rand = "0.7"
@@ -32,6 +33,7 @@ tokio-util = "0.7"
 arc-swap = "1.6"
 async-trait = "0.1.76"
 async-stream = "0.3.5"
+zeroconf = "0.12"
 
 [dev-dependencies]
 env_logger = "0.10"

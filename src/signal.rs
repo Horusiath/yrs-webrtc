@@ -139,7 +139,8 @@ impl WSSignalingConn {
 
 #[async_trait::async_trait]
 impl SignalingConn for WSSignalingConn {
-    async fn send(&self, msg: &Message) -> Result<()> {
+    async fn send<'a>(&self, msg: &Message<'a>) -> Result<()> {
+        log::trace!("signalling conn sending: {:?}", msg);
         self.send(msg).await
     }
 
