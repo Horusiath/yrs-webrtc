@@ -4,7 +4,7 @@ pub mod signal;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use y_sync::awareness::Awareness;
+use yrs::sync::awareness::Awareness;
 
 pub type AwarenessRef = Arc<RwLock<Awareness>>;
 
@@ -25,7 +25,7 @@ mod test {
     use tokio::time::sleep;
     use warp::ws::{WebSocket, Ws};
     use warp::{Filter, Rejection, Reply};
-    use y_sync::awareness::Awareness;
+    use yrs::sync::awareness::Awareness;
     use yrs::{GetString, Text, Transact};
     use yrs_warp::signaling::{signaling_conn, SignalingService};
 

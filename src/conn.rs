@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use wrtc::data_channel::DataChannel;
 use wrtc::peer_connection::{PeerConnection, Signal};
-use y_sync::sync::{DefaultProtocol, Protocol, SyncMessage};
+use yrs::sync::{DefaultProtocol, Protocol, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{ReadTxn, Transact, Update};
@@ -40,8 +40,10 @@ impl Connection {
         remote_peer_id: PeerId,
         room: Weak<Room>,
     ) -> Result<Self> {
-        let room_ref = room.upgrade().unwrap();
-        let options = wrtc::peer_connection::Options::with_data_channels(&[&room_ref.name()]);
+        let room_ref: Arc<Room> = room.upgrade().unwrap();
+        let options = wrtc::peer_connection::Options::with_data_channels(
+            [room_ref.name().as_ref()].as_slice(),
+        );
         let peer_events = room_ref.peer_events().clone();
         let peer = Arc::new(PeerConnection::start(initiator, options).await?);
 
@@ -89,12 +91,12 @@ impl Connection {
                 {
                     let awareness = awareness.read().await;
                     let update = awareness.update()?;
-                    let msg = y_sync::sync::Message::Sync(SyncMessage::SyncStep1(
+                    let msg = yrs::sync::Message::Sync(SyncMessage::SyncStep1(
                         awareness.doc().transact().state_vector(),
                     ));
                     let mut sink = sink.lock().await;
                     sink.send(Bytes::from(msg.encode_v1())).await?;
-                    let msg = y_sync::sync::Message::Awareness(update);
+                    let msg = yrs::sync::Message::Awareness(update);
                     sink.send(Bytes::from(msg.encode_v1())).await?;
                 }
 
@@ -104,7 +106,7 @@ impl Connection {
                     let is_synced = is_synced.clone();
                     tokio::spawn(async move {
                         while let Some(msg) = stream.next().await {
-                            let msg = y_sync::sync::Message::decode_v1(&msg?.data)?;
+                            let msg = yrs::sync::Message::decode_v1(&msg?.data)?;
                             let reply =
                                 handle_msg(&DefaultProtocol, &awareness, msg, &is_synced).await?;
                             if let Some(reply) = reply {
@@ -200,10 +202,10 @@ struct ConnectedState {
 async fn handle_msg<P: Protocol>(
     protocol: &P,
     a: &AwarenessRef,
-    msg: y_sync::sync::Message,
+    msg: yrs::sync::Message,
     is_synced: &AtomicBool,
-) -> std::result::Result<Option<y_sync::sync::Message>, y_sync::sync::Error> {
-    use y_sync::sync::Message;
+) -> std::result::Result<Option<yrs::sync::Message>, yrs::sync::Error> {
+    use yrs::sync::Message;
     match msg {
         Message::Sync(msg) => match msg {
             SyncMessage::SyncStep1(sv) => {

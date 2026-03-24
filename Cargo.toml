@@ -13,8 +13,7 @@ readme = "./README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-yrs = "0.17"
-y-sync = { version = "0.4", features = ["net"] }
+yrs = { version = "0.25.0", features = ["sync"] }
 wrtc = "0.3"
 log = "0.4"
 thiserror = "1.0"
