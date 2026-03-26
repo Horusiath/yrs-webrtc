@@ -12,11 +12,10 @@ use std::sync::{Arc, Weak};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use y_sync::awareness::Awareness;
-use y_sync::sync::{Message, SyncMessage, MSG_SYNC_UPDATE};
 use yrs::encoding::write::Write;
+use yrs::sync::{protocol::MSG_SYNC_UPDATE, Awareness, Message, SyncMessage};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
-use yrs::{uuid_v4, ReadTxn, Transact, UpdateSubscription};
+use yrs::{uuid_v4, ReadTxn, Subscription, Transact};
 
 pub(crate) const MSG_SYNC: u8 = 0;
 
@@ -28,8 +27,8 @@ pub struct Room {
     signaling_conns: Arc<[Arc<SignalingConn>]>,
     signaling_msg_handlers: Vec<JoinHandle<()>>,
     max_conns: usize,
-    update_sub: UpdateSubscription,
-    awareness_update_sub: y_sync::awareness::UpdateSubscription,
+    update_sub: Subscription,
+    awareness_update_sub: Subscription,
     broadcast_job: JoinHandle<()>,
     peer_events: PeerEvents,
     pub(crate) wrtc_conns: Arc<RwLock<HashMap<Arc<str>, Connection>>>,
@@ -47,11 +46,11 @@ impl Room {
 
     pub fn create_internal(
         name: Topic,
-        mut awareness: Awareness,
+        awareness: Awareness,
         signaling_conns: Arc<[Arc<SignalingConn>]>,
         max_conns: usize,
     ) -> Arc<Self> {
-        let peer_id = uuid_v4(&mut rand::thread_rng());
+        let peer_id = uuid_v4();
         let doc = awareness.doc();
         let wrtc_conns: Arc<RwLock<HashMap<Arc<str>, Connection>>> =
             Arc::new(RwLock::new(HashMap::new()));
@@ -70,7 +69,7 @@ impl Room {
         };
         let awareness_update_sub = {
             let broadcast = broadcast.clone();
-            awareness.on_update(move |awareness, e| {
+            awareness.on_update(move |awareness, e, _| {
                 let added = e.added();
                 let updated = e.updated();
                 let removed = e.removed();
@@ -238,13 +237,6 @@ impl Room {
         &self.peer_events
     }
 
-    pub(crate) async fn remove_conn(&self, peer_id: &PeerId) {
-        let mut conns = self.wrtc_conns.write().await;
-        if let Some(_conn) = conns.remove(peer_id) {
-            let _ = self.peer_events.send(PeerEvent::Down(peer_id.clone()));
-        }
-    }
-
     pub(crate) async fn announce_signaling_info(&self) -> Result<()> {
         let subscribe = crate::signal::Message::Subscribe {
             topics: vec![Cow::from(self.name.deref())],
@@ -323,7 +315,7 @@ impl Room {
         }
 
         {
-            let mut awareness = self.awareness.write().await;
+            let awareness = self.awareness.write().await;
             let client_id = awareness.client_id();
             awareness.remove_state(client_id);
         }
